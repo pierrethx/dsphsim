@@ -9,8 +9,10 @@ import logging
 from collections import OrderedDict as odict
 
 import numpy as np
+import sys
 
-from dsphsim.instruments import factory as instrumentFactory
+sys.path.append('../dsphsim/')
+from instruments import factory as instrumentFactory
 
 def factory(name, **kwargs):
     from ugali.utils.factory import factory

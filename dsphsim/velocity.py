@@ -85,6 +85,22 @@ def draw_values_residuals(x1,y1,x2,y2,**kwargs):
 
     return ax, rax
 
+def plum_potential(x):
+    """ 
+    Normalized gravitational potential for plummer profile. 
+
+    Parameters:
+    x : Radial distance normalized to plum scale radius (r/rs)
+
+    Returns:
+    phi : Normalized gravitational potential
+    """
+    scalar = np.isscalar(x)
+    x = np.atleast_1d(np.clip(x, 1e-10, None))
+    Phi = -1./np.sqrt(1.+x**2)
+    if scalar: return np.asscalar(Phi)
+    else: return Phi
+
 def nfw_potential(x):
     """ 
     Normalized gravitational potential for NFW profile. 
@@ -134,6 +150,25 @@ def deriv_nfw_potential(x):
     else:
         return dPhi
 
+def deriv_plum_potential(x):
+    """
+    Derivative of the Plummer potential with respect to x.
+
+    Parameters:
+    x : Radial distance normalized to scale radius (r/rs)
+
+    Returns:
+    dPhi : Derivative (with respect to x) of gravitational potential
+    """
+    scalar = np.isscalar(x)
+    x = np.atleast_1d(np.where(x==0, 1e-30, x))
+    # -1./np.sqrt(1.+x**2)
+    dPhi = x/(1+x**2)**(3/2) 
+    if scalar:
+        return np.asscalar(dPhi)
+    else:
+        return dPhi
+
 def deriv_rhostar_deriv_Psi(x,y):
     """
     Derivative of the Plummer density with respect to the NFW potential.
@@ -147,6 +182,20 @@ def deriv_rhostar_deriv_Psi(x,y):
            the gravitational potential
     """
     return deriv_rhostar(x,y)/deriv_nfw_potential(x)
+
+def deriv_rhostar_deriv_Psi_2(x,y):
+    """
+    Derivative of the Plummer density with respect to the Plummer potential.
+
+    Parameters:
+    x : Radial distance normalized to Plummer scale radius (r/rs)
+    y : Ratio between (stars) Plummer half-light radius and (kine) Plummer scale radius
+
+    Returns: 
+    dPhi : Derivative of the stellar density with respect to
+           the gravitational potential
+    """
+    return deriv_rhostar(x,y)/deriv_plum_potential(x)
 
 def rhostar(x,y):
     """
@@ -243,7 +292,7 @@ class PhysicalVelocity(VelocityDistribution):
         self.velocities = np.linspace(velmin,velmax,nvs)
 
         xmin = getattr(self,'xmin',1e-4)
-        xmax = getattr(self,'xmax',5)
+        xmax = getattr(self,'xmax',20) ##madechange
         self.xvalues = np.logspace(np.log10(xmin),np.log10(xmax),nrs)
 
         self.build_interps()
@@ -589,8 +638,124 @@ class PhysicalVelocity(VelocityDistribution):
 
         return np.sqrt(sigma2)
 
+class StellarVelocity(PhysicalVelocity):
+    @classmethod
+    def rs2rvmax(cls, rs): 
+        return 1.4142 * rs
+
+    @classmethod
+    def rvmax2rs(cls, rvmax): 
+        return rvmax/1.4142
+
+    @classmethod
+    def rhos2vmax(cls, rhos, rs): 
+        G = 4.302e-6 # kpc Msun^-1 (km/s)^2
+        return rs  * np.sqrt( rhos * (8*np.pi*G)/15.58845 )
+
+    @classmethod
+    def vmax2rhos(cls, vmax, rvmax): 
+        G = 4.302e-6 # kpc Msun^-1 (km/s)^2
+        rs = cls.rvmax2rs(rvmax)
+        return 15.58845/(8*np.pi*G) * (vmax/rs)**2
+
+    @property
+    def Phis(self):
+        # Central potential as in 1406.6079 in (km/s)^2 
+        # 1.64/sqrt(4*pi)=0.465
+        # 1.27/sqrt(4*pi)=0.358
+        return self.vmax**2/0.358**2 
+
+    @property
+    def rs(self):
+        """
+        NFW scale radius (kpc) from Eqn 9 of:
+        http://arxiv.org/abs/0805.4416
+        """
+        return self.rvmax/1.4142
+
+    @property
+    def rhos(self):
+        """
+        NFW scale density (Msun/kpc^3) from Eqn 10 of:
+        http://arxiv.org/abs/0805.4416
+        """
+        G = 4.302e-6 # kpc Msun^-1 (km/s)^2
+        return 15.58845/(8*np.pi*G) * (self.vmax/self.rs)**2
+
+    def build_interps(self):
+        # calculate the derivative to the stellar density with respect
+        # to the potential xmin, xmax is in units of the dark matter
+        # scale radius
+        xmin = 1.e-6
+        xmax = 1.e2
+        #xstep = np.log(xmax/xmin)/float(nx-1)
+        rx = np.exp(np.linspace(np.log(xmin),np.log(xmax),nx))
+        rx = np.append(0,rx)
+
+        # Calculate the approximate derivative of the NFW potential for
+        # the Eddington formula
+        Phi = plum_potential(rx)
+        Psi = -Phi
+
+        self.interp_psi = loginterp1d(rx,Psi,bounds_error=False)
+
+        drhostardPsi = -deriv_rhostar_deriv_Psi_2(rx,self.rpl/self.rs)
+        
+        # get the arrays in increasing numerical order 
+        Psi_reverse = Psi[::-1]
+        drhostardPsi_reverse = drhostardPsi[::-1]
+        rx_reverse = rx[::-1]
+
+        # Interpolate derivative as a function of potential 
+        self.interp_e = loginterp1d(Psi_reverse,drhostardPsi_reverse,
+                                    kind='linear',bounds_error=False)
+
+        # Define the range of (binding) energies to evaluate at 
+        emin = np.min(Psi_reverse)
+        emax = np.max(Psi_reverse)
+        #estep = np.log(emax/emin)/float(nes-1)
+        #print emin, emax, estep
+
+        # Prepend a zero, something Fortran was doing...
+        #energy = emin*np.exp(np.arange(1,nes)*estep)
+        energy = np.exp(np.linspace(np.log(emin),np.log(emax),nes))
+        energy = np.append(0,energy)
+
+        int_e = self.integrate_energy(energy,self.interp_e,method='simps')
+
+        ## Prepend a zero, something Fortran was doing...
+        #energy    = np.append([0],energy)
+        #int_e     = np.append([0],int_e)
+
+        self.interp_inte = interp1d(energy,int_e,kind='linear',bounds_error=False)
+        #self.interp_inte = UnivariateSpline(energy,int_e,k=1,s=0)
+
+        def fb(e, emax=emax):
+            return np.where(e >= emax, 0, self.interp_inte(e))
+
+        # Fortran was iterating to nes-2
+        temp_int = derivative(fb,energy[:-2],1e-4)
+        temp_int[0] = 0
+        # Make the array the same size as energy
+        temp_int = np.append(temp_int, [np.nan, np.nan])
+
+        logfe_temp = np.array(temp_int)
+        kcut       = ~np.isnan(logfe_temp)
+        energy_cut = self.Phis*energy[kcut]
+        logfe_cut  = np.array(logfe_temp)[kcut]
+         
+        # Interpolation for log(f) (?) as a function of energy
+        self.energy = energy_cut
+        self.interp_logfe = interp1d(energy_cut,logfe_cut,
+                                     kind='linear',bounds_error=False)
+
+        return emin,emax
+
+
 Gaussian = GaussianVelocity
 Physical = PhysicalVelocity
+Stellar  = StellarVelocity
+
 
 # ADW: It would be good to replace this with ugali.utils.factory;
 # however, this needs to accept unused kwargs.

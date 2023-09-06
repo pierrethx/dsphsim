@@ -6,11 +6,12 @@ Encapsulate the properties of a dwarf galaxy.
 import copy
 from collections import OrderedDict as odict
 import numpy as np
-import logging
+import logging,sys
 
-from dsphsim.velocity import GaussianVelocity
-from dsphsim.velocity import PhysicalVelocity
-from dsphsim.velocity import velocityFactory
+sys.path.append('../dsphsim/')
+from velocity import GaussianVelocity
+from velocity import PhysicalVelocity
+from velocity import velocityFactory
 
 from ugali.analysis.model import Model, Parameter
 from ugali.analysis.source import Source

@@ -263,6 +263,42 @@ def parser():
                        help="Number of samples for KDE")
     return parser
 
+def simplecall(infi,plort=False,vell='VMEAS',veler='VERR'):
+
+    data = np.genfromtxt(infi,names=True,dtype=None)
+
+    vel = data[vell]
+    if veler is None or veler.lower() == 'none':
+        velerr = np.zeros_like(vel)
+    else:
+        velerr = data[veler]
+
+    # Remove nan values (is this fair?)
+    cut = (np.isnan(vel) | np.isnan(velerr))
+    vel,velerr = vel[~cut],velerr[~cut]
+
+    kwargs = dict(nwalkers=20,nburn=100,
+                  nsteps=5000,nthreads=1)
+    samples,sampler = mcmc(vel,velerr,**kwargs)
+    
+    mean,std = scipy.stats.norm.fit(vel)
+    #print('%-05s : %.2f'%('mean',mean))
+    #print('%-05s : %.2f'%('std',std))
+
+    intervals = {}
+    for i,name in enumerate(PARAMS):
+        peak,[low,high] = peak_interval(samples[name],alpha=0.32,samples=1000)
+        intervals.update({name:[peak,low,high]})
+    
+    if plort:
+        import matplotlib.pyplot as plt
+        ff,aa=plt.subplots()
+        velocities=[q[0] for q in samples]
+        aa.hist(velocities,density=True)
+        plt.show()
+
+    return intervals
+
 if __name__ == "__main__":
     p = parser()
     args = p.parse_args()

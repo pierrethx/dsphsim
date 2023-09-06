@@ -9,11 +9,12 @@ import logging
 
 import scipy.stats as stats
 
-import dsphsim
-from dsphsim.dwarf import Dwarf
-from dsphsim.instruments import factory as instrumentFactory
-from dsphsim.tactician import factory as tacticianFactory
-from dsphsim.velocity import PhysicalVelocity
+#import dsphsim
+sys.path.append('../dsphsim/')
+from dwarf import Dwarf
+from instruments import factory as instrumentFactory
+from tactician import factory as tacticianFactory
+from velocity import PhysicalVelocity
 
 from ugali.utils.projector import dist2mod, mod2dist
 
@@ -66,6 +67,7 @@ class Simulator(object):
         # Allow user to change these thresholds?
         snr_thresh = tactician.snr_thresh
         saturate = tactician.instrument.MAGMIN
+
         sel = (mag_1 > saturate) & (np.nan_to_num(snr) > snr_thresh)
         nstar = sel.sum()
         #np.seterr(**olderr)
@@ -140,7 +142,7 @@ class Simulator(object):
 
         group = parser.add_argument_group('Kinematic')
         group.add_argument('--kinematics',type=str,default='Gaussian',
-                           choices = ['Gaussian', 'Physical'],
+                           choices = ['Gaussian', 'Physical','Stellar'],
                            help='kinematic distribution function')
         group.add_argument('--vmean',type=float,default=60.,
                             help='mean systemic velocity (km/s)')
