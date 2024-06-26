@@ -70,6 +70,50 @@ class Dwarf(Source):
         self.reset_sync()
         return mag_1, mag_2, lon, lat, vel
 
+    def simulate_ss(self,kinem):
+
+        import os
+        sys.path.append('../../StarSampler/StarSampler')
+        import star_sampler as ssp
+        import osipkov_merritt as om
+        import scipy as sp
+        from contextlib import contextmanager
+        import warnings
+
+        @contextmanager
+        def suppress_stdout():
+            with open(os.devnull,'w') as devnull:
+                old_stdout=sys.stdout
+                sys.stdout=devnull
+                try:
+                    yield
+                finally:
+                    sys.stdout=old_stdout
+        
+        #[args.kinematics,args.vmean,rhos,rs,args.rhalf]
+        model_param = {'ra':1000000, 'rs_s':kinem[4],'al_s':2,'be_s':5,'ga_s':0,
+                       'rho':kinem[2],'rs':kinem[3],'alpha':1,'beta':3,'gamma':1}
+    
+        stellar_mass = self.richness * self.isochrone.stellar_mass()
+        mag_1, mag_2 = self.isochrone.simulate(stellar_mass)
+
+        warnings.filterwarnings("ignore")
+        with warnings.catch_warnings():
+            with suppress_stdout():
+
+                om1=om.OM(**model_param)
+                Nstars=len(mag_1)
+                print(Nstars)
+                if True:
+                    x1,y1,z1,vx1,vy1,vz1=om1.conditional_sample(samplesize=Nstars, Phi_table_steps=1e5, GQ_table_steps=1000, proposal_steps = 1000, r_vr_vt=True)
+                elif False:
+                    x1,y1,z1,vx1,vy1,vz1=ssp.rejection_sample(om1,samplesize=Nstars,r_vr_vt=True,filename=None)
+                else:
+                    x1,y1,z1,vx1,vy1,vz1=ssp.impt_sample(om1,steps=20,resample_factor=5,samplesize=Nstars,replace=True,r_vr_vt=True,filename=None)
+
+        vel=vz1+kinem[1]        
+        return mag_1, mag_2, x1, y1, vel
+
     def parse(self, args):
         pass
 

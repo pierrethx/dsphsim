@@ -1,29 +1,37 @@
 # IMACS on Magellan
-# http://www.lco.cl/telescopes-information/magellan/instruments/imacs/imacs-specs
-# 
-# Nothing to see here yet...
-27.0   NaN
-26.5   NaN
-26.0   NaN
-25.5   NaN
-25.0   NaN
-24.5   NaN
-24.0   NaN
-23.5   NaN
-23.0   NaN
-22.5   NaN
-22.0   NaN
-21.5   NaN
-21.0   NaN
-20.5   NaN
-20.0   NaN
-19.5   NaN
-19.0   NaN
-18.5   NaN
-18.0   NaN
-17.5   NaN
-17.0   NaN
-16.5   NaN
-16.0   NaN
-15.5   NaN
-15.0   NaN
+# # based on 9 hr observation on Eridanus II in Li+2017
+# # https://arxiv.org/pdf/1611.05052.pdf
+# # Grating: 1200
+# # Slitwidth: 0.7 asec
+# # Binning: 1x1
+# # Exptime: 3600 x 9
+# # Central Wavelength: 8500 A
+# # Seeing: 0.75 arcsec
+#i-MAG   32400s
+27.0 0.001
+26.5 0.002
+26.0 0.005
+25.5 0.01
+25.0 0.03
+24.5 0.08
+24.0 0.16
+23.5 0.34
+23.0 0.66
+22.5 1.23
+22.0 2.13
+21.5 4.04
+21.0 6.39
+20.5 9.9
+20.0 15.31
+19.5 23.33
+19.0 34.69
+18.5 50.11
+18.0 70.32
+17.5 96.04
+17.0 127.98
+17.5 96.03
+17.0 127.98
+16.5 166.89
+16.0 213.47
+15.5 268.46
+15.0 332.58

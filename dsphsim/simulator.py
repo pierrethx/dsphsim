@@ -53,6 +53,7 @@ class Simulator(object):
     def simulate(dwarf,tactician,**kwargs):
         """ Simulate observation """
 
+        #print(kinem,kwargs)
         # Set the second band to 'i' (matches CaT lines)
         dwarf.band_1 = 'g'; dwarf.band_2 = 'i'
         mag_1,mag_2,ra,dec,velocity = dwarf.simulate()
@@ -120,6 +121,82 @@ class Simulator(object):
                 vmeas, vmeaserr, vsyserr, verr]
         return np.rec.fromarrays(data,names=names)
 
+    @staticmethod
+    def simulate_ss(dwarf,tactician,kinem,**kwargs):
+        """ Simulate observation """
+
+        #print(kinem,kwargs)
+        # Set the second band to 'i' (matches CaT lines)
+        dwarf.band_1 = 'g'; dwarf.band_2 = 'i'
+        mag_1,mag_2,x,y,velocity = dwarf.simulate_ss(kinem)
+
+        from ugali.utils.projector import Projector
+        projector = Projector(kinem[-2],kinem[-1],'ait') 
+        ra,dec=projector.imageToSphere(x,y)
+   
+        # Draw the SNR from the instrument and observation tactician
+        # Use the i-band magnitude (eventually may include ra,dec too)
+        data = np.rec.fromarrays([mag_2],names=['mag'])
+        snr = tactician.schedule(data,**kwargs)
+        #snr = instrument.mag2snr(mag_2,exp)
+
+        #olderr = np.seterr(all='ignore')
+        # Allow user to change these thresholds?
+        snr_thresh = tactician.snr_thresh
+        saturate = tactician.instrument.MAGMIN
+
+        sel = (mag_1 > saturate) & (np.nan_to_num(snr) > snr_thresh)
+        nstar = sel.sum()
+        #np.seterr(**olderr)
+
+        ra = ra[sel]
+        dec = dec[sel]
+        mag_1 = mag_1[sel]
+        mag_2 = mag_2[sel]
+        sep = dwarf.kernel.angsep(ra,dec)
+        vel = velocity[sel]
+        snr = snr[sel]
+
+        rproj = dwarf.distance * np.tan(np.radians(sep))
+        #mag = mag_1
+        #color = (mag_1-mag_2)
+
+        # The true velocity, u, of each star is the sum of the mean velocity and
+        # a sampling of the intrinsic velocity dispersion
+        vtrue = vel
+
+        # There are two components of the measurement uncertainty on
+        # the velocity of each star
+        vstaterr = tactician.instrument.snr2err(snr)
+        vsyserr = tactician.instrument.vsys * np.ones_like(snr)
+  
+        # The measured velocity is the true velocity plus a component from the
+        # instrumental measurement error
+        vstat = vstaterr*randerr(nstar,'normal')
+        vsys = vsyserr*randerr(nstar,'normal')
+
+        vmeas = vtrue + vstat + vsys
+
+        # Now assign the measurement error to the statistical error
+        vmeaserr = vstaterr
+
+        # The error that is commonly used is the sum of the measurement error
+        # and the systematic error added in quadrature
+        verr = np.sqrt(vstaterr**2 + vsyserr**2)
+
+        # Do we also want to save vsyserr as VSYSERR?
+        names = ['RA','DEC',
+                 'MAG_%s'%dwarf.band_1.upper(),'MAG_%s'%dwarf.band_2.upper(),
+                 'ANGSEP','RPROJ','SNR',
+                 'VTRUE','VSTAT','VSYS',
+                 'VMEAS','VMEASERR','VSYSERR','VERR']
+        data = [ra, dec,
+                mag_1, mag_2,
+                sep, rproj, snr,
+                vtrue, vstat, vsys,
+                vmeas, vmeaserr, vsyserr, verr]
+        return np.rec.fromarrays(data,names=names)
+
     @classmethod
     def parser(cls):
         import argparse
@@ -142,7 +219,7 @@ class Simulator(object):
 
         group = parser.add_argument_group('Kinematic')
         group.add_argument('--kinematics',type=str,default='Gaussian',
-                           choices = ['Gaussian', 'Physical','Stellar'],
+                           choices = ['Gaussian', 'Physical','Stellar','StarSampler'],
                            help='kinematic distribution function')
         group.add_argument('--vmean',type=float,default=60.,
                             help='mean systemic velocity (km/s)')
@@ -266,7 +343,10 @@ if __name__ == "__main__":
     # Set the kinematic properties
     #if args.rs is not None: args.rvmax = 2.163*args.rs
     #if args.rhos is not None: raise Exception('Not implemented')
-    kinematics=Dwarf.createKinematics(name=args.kinematics, 
+    kinem=args.kinematics
+    if args.kinematics=='StarSampler':
+        kinem='Gaussian'
+    kinematics=Dwarf.createKinematics(name=kinem, 
                                       vdisp=args.vdisp, vmean=args.vmean,
                                       vmax=args.vmax, rvmax=args.rvmax)
     dwarf.set_kinematics(kinematics)
@@ -288,8 +368,16 @@ if __name__ == "__main__":
                                
     for i in range(args.nsims):
         # Run the simulation
-        data = Simulator.simulate(dwarf,tact)
-     
+
+        rs=PhysicalVelocity.rvmax2rs(args.rvmax)
+        rhos=PhysicalVelocity.vmax2rhos(args.vmax, args.rvmax)
+        print([args.kinematics,args.vmean,rhos,rs,args.rhalf,args.ra,args.dec])
+        if args.kinematics=='StarSampler':
+   
+            data = Simulator.simulate_ss(dwarf,tact,[args.kinematics,args.vmean,rhos,rs,args.rhalf,args.ra,args.dec])
+        else:
+            data = Simulator.simulate(dwarf,tact)     
+
         # Write output
         if args.outfile:
             outfile = args.outfile

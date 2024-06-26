@@ -756,7 +756,6 @@ Gaussian = GaussianVelocity
 Physical = PhysicalVelocity
 Stellar  = StellarVelocity
 
-
 # ADW: It would be good to replace this with ugali.utils.factory;
 # however, this needs to accept unused kwargs.
 def factory(name, **kwargs):

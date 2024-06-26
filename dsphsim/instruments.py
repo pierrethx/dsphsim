@@ -120,6 +120,7 @@ class IMACS(Instrument):
     """
 
     _filename = 'imacs_i.dat'
+    _exptime0 = 32400.
     _defaults = odict([
         ('vsys',1.5),
         ('fov', 239),

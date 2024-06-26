@@ -23,6 +23,11 @@ PARAMS = odict([
     ('sigma',r'$\sigma$ (km/s)'),
 ])
 
+PARAMS2 = odict([
+    ('N0',r'$N_0$ (number)'),
+    ('rhalf',r'$r_h$ (kpc)'),
+])
+
 ###############################################
 # These functions come from ugali.utils.stats #
 ###############################################
@@ -167,6 +172,96 @@ def mcmc(vel, vel_err, **kwargs):
     np.seterr(**nperr)
     return samples, sampler
 
+def lnprior2(theta, vel):
+    """
+    Log-prior to set the bounds of the parameter space:
+      sigma > 0 
+      vmin < mu < vmax
+    """
+    #sigma, mu = theta
+    N0,ra = theta
+
+    if  N0 <= 0:
+        return -np.inf
+    if not vel.min() < ra < vel.max():
+        return -np.inf
+
+    return 0
+
+def lnlike2(theta, vel, vel_err):
+    """
+    Log-likelihood function from Walker et al. (2007) Eq. :
+    http://arxiv.org/abs/astro-ph/0511465
+    """
+    #sigma, mu = theta
+    N0,ra = theta
+
+    #N0=1
+    # break long equation into three parts
+    a = -N0 
+    b = np.sum(np.log( 2*N0*vel * ra**2 ))
+    c = -2*np.sum( np.log( ra**2+vel**2))
+    #print(ra,a+b+c)
+    return a + b + c
+
+def lnprob2(theta, vel, vel_err):
+    lp = lnprior2(theta, vel)
+    if not np.isfinite(lp):
+        return -np.inf
+    return lp + lnlike2(theta, vel, vel_err)
+
+def mcmc2(vel, vel_err, **kwargs):
+    nperr = np.seterr(invalid='ignore')
+
+    ndim = len(PARAMS)  # number of parameters in the model
+
+    nwalkers = kwargs.get('nwalkers',20) # number of MCMC walkers
+    nburn    = kwargs.get('nburn',50)    # "burn-in" period to let chains stabilize
+    nsteps   = kwargs.get('nsteps',5000) # number of MCMC steps to take
+    nthreads = kwargs.get('nthreads',1)  # number of threads
+
+    if not np.all(np.isfinite([vel,vel_err])):
+        print("WARNING: Non-finite value found in data")
+        sel = np.isfinite(vel) & np.isfinite(vel_err)
+        vel,vel_err = vel[sel], vel_err[sel]
+
+    mean, std = np.median(vel), np.std(vel)
+    print('vibes',mean,std)
+    sigma = np.random.normal(mean, scale=std, size=(nwalkers))
+    n0 = 1# len(vel)
+    sca= 0.001 # np.sqrt(n0)
+    mu = np.random.normal(n0, scale=sca, size=(nwalkers))
+    starting_guesses = np.vstack([mu,sigma]).T
+
+    sampler = emcee.EnsembleSampler(nwalkers, ndim, lnprob2,
+                                    args=[vel,vel_err], threads=nthreads)
+
+    # Burn the requested number of steps
+    if int(emcee.__version__[0]) >= 3:
+        state = sampler.run_mcmc(starting_guesses,nburn)
+        sampler.reset()
+        sampler.run_mcmc(state,nsteps)
+    else:
+        pos,prob,state = sampler.run_mcmc(starting_guesses,nburn)
+        sampler.reset()
+        sampler.run_mcmc(pos,nsteps,state,prob)
+
+    samples = sampler.chain.reshape(-1,ndim,order='F')
+
+    names = list(PARAMS2.keys())
+    try:
+        from ugali.analysis.mcmc import Samples
+        samples = Samples(samples.T,names=names)
+    except ImportError:
+        # ugali is not installed; use recarray
+        samples = np.rec.fromrecords(samples,names=names)
+
+    #samples = burn(samples,nburn*nwalkers)
+    samples = cull2(samples)
+
+    np.seterr(**nperr)
+    return samples, sampler
+
 def burn(samples,nburn):
     """
     Burn the first `nburn` steps for each walker.
@@ -180,6 +275,13 @@ def cull(samples):
     Remove samples with unphysical dispersion (sigma < 0).
     """
     sel = (samples['sigma'] >= 0)
+    return samples[sel]
+
+def cull2(samples):
+    """
+    Remove samples with unphysical dispersion (sigma < 0).
+    """
+    sel = (samples['N0'] >= 0) & (samples['rhalf'] >=0)
     return samples[sel]
 
 def clip(samples,nsigma=4):
@@ -263,11 +365,57 @@ def parser():
                        help="Number of samples for KDE")
     return parser
 
+def medcall(infi,ncall=None,sort=False,plort=False,vell='VMEAS',veler='VERR'):
+
+    data = np.genfromtxt(infi,names=True,dtype=None)
+
+    vel = data[vell]
+    print(len(vel),vel)
+    if veler is None or veler.lower() == 'none':
+        velerr = np.zeros_like(vel)
+    else:
+        velerr = data[veler]
+
+    # Remove nan values (is this fair?)
+    cut = (np.isnan(vel) | np.isnan(velerr))
+    vel,velerr = vel[~cut],velerr[~cut]
+
+    if sort:
+       qq=np.argsort(velerr)
+       vel=vel[qq]
+       velerr=velerr[qq]
+    if ncall is not None:
+       vel=vel[:ncall]
+       velerr=velerr[:ncall]     
+
+    kwargs = dict(nwalkers=20,nburn=100,
+                  nsteps=5000,nthreads=1)
+    samples,sampler = mcmc(vel,velerr,**kwargs)
+    
+    mean,std = scipy.stats.norm.fit(vel)
+    #print('%-05s : %.2f'%('mean',mean))
+    #print('%-05s : %.2f'%('std',std))
+
+    intervals = {}
+    for i,name in enumerate(PARAMS):
+        peak,[low,high] = peak_interval(samples[name],alpha=0.32,samples=1000)
+        intervals.update({name:[peak,low,high]})
+    
+    if plort:
+        import matplotlib.pyplot as plt
+        ff,aa=plt.subplots()
+        velocities=[q[0] for q in samples]
+        aa.hist(velocities,density=True)
+        plt.show()
+
+    return intervals,len(vel)
+
 def simplecall(infi,plort=False,vell='VMEAS',veler='VERR'):
 
     data = np.genfromtxt(infi,names=True,dtype=None)
 
     vel = data[vell]
+    print(len(vel),vel)
     if veler is None or veler.lower() == 'none':
         velerr = np.zeros_like(vel)
     else:
@@ -297,7 +445,44 @@ def simplecall(infi,plort=False,vell='VMEAS',veler='VERR'):
         aa.hist(velocities,density=True)
         plt.show()
 
-    return intervals
+    return intervals,len(vel)
+
+def simplecall_too(infi,plort=False,vell='RPROJ',veler=None):
+
+    data = np.genfromtxt(infi,names=True,dtype=None)
+
+    vel = data[vell]
+    print(len(vel),vel)
+    if veler is None or veler.lower() == 'none':
+        velerr = np.zeros_like(vel)
+    else:
+        velerr = data[veler]
+
+    # Remove nan values (is this fair?)
+    cut = (np.isnan(vel) | np.isnan(velerr))
+    vel,velerr = vel[~cut],velerr[~cut]
+
+    kwargs = dict(nwalkers=20,nburn=100,
+                  nsteps=5000,nthreads=1)
+    samples,sampler = mcmc2(vel,velerr,**kwargs)
+
+    #mean,std = scipy.stats.norm.fit(vel)
+    #print('%-05s : %.2f'%('mean',mean))
+    #print('%-05s : %.2f'%('std',std))
+
+    intervals = {}
+    for i,name in enumerate(PARAMS2):
+        peak,[low,high] = peak_interval(samples[name],alpha=0.32,samples=1000)
+        intervals.update({name:[peak,low,high]})
+
+    if plort:
+        import matplotlib.pyplot as plt
+        ff,aa=plt.subplots()
+        velocities=[q[0] for q in samples]
+        aa.hist(velocities,density=True)
+        plt.show()
+
+    return intervals,len(vel)
 
 if __name__ == "__main__":
     p = parser()
