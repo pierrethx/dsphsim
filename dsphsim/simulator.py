@@ -132,7 +132,7 @@ class Simulator(object):
 
         from ugali.utils.projector import Projector
         projector = Projector(kinem[-2],kinem[-1],'ait') 
-        ra,dec=projector.imageToSphere(x,y)
+        ra,dec=projector.imageToSphere(np.degrees(np.arctan(x/dwarf.distance) ),np.degrees(np.arctan(y/dwarf.distance) ))
    
         # Draw the SNR from the instrument and observation tactician
         # Use the i-band magnitude (eventually may include ra,dec too)
@@ -158,6 +158,8 @@ class Simulator(object):
         snr = snr[sel]
 
         rproj = dwarf.distance * np.tan(np.radians(sep))
+        #rrr=(np.sqrt(x**2+y**2))[sel]
+
         #mag = mag_1
         #color = (mag_1-mag_2)
 

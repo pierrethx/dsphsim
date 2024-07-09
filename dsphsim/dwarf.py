@@ -93,7 +93,7 @@ class Dwarf(Source):
         #[args.kinematics,args.vmean,rhos,rs,args.rhalf]
         model_param = {'ra':1000000, 'rs_s':kinem[4],'al_s':2,'be_s':5,'ga_s':0,
                        'rho':kinem[2],'rs':kinem[3],'alpha':1,'beta':3,'gamma':1}
-    
+        print("parms",model_param) 
         stellar_mass = self.richness * self.isochrone.stellar_mass()
         mag_1, mag_2 = self.isochrone.simulate(stellar_mass)
 
