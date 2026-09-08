@@ -1,0 +1,39 @@
+# GIRAFFE on the VLT
+# https://www.eso.org/observing/etc/bin/gen/form?INS.NAME=GIRAFFE+INS.MODE=spectro
+#
+# Template: G0 (Pickles)
+# AB Magnitudes
+# Point Source
+# Moon Phase: 0
+# Airmass: 1.10
+# Seeing: 0.80 asec
+# Fiber Mode: Madusa (1.2 asec/microlense)
+# High Resolution: HR21 (875.7 nm)
+# Carreras CCD mode: standard
+# Reference Wavelength: 875.700 nm (mean signal to noise)
+#MAG   36000s 10000s 3600s 1000s 360s
+27.0   0.037
+26.5   0.059
+26.0   0.094
+25.5   0.148
+25.0   0.235
+24.5   0.372
+24.0   0.588
+23.5   0.929
+23.0   1.466
+22.5   2.307
+22.0   3.616
+21.5   5.634
+21.0   8.703
+20.5   13.274
+20.0   19.906
+19.5   29.217
+19.0   41.827
+18.5   58.326
+18.0   79.325
+17.5   105.585
+17.0   138.160
+16.5   178.515
+16.0   228.622
+15.5   291.037
+15.0   369.022

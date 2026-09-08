@@ -1,0 +1,522 @@
+#!/usr/bin/env python
+"""
+Simple tool to simulate stellar populations.
+"""
+
+import os,sys
+import numpy as np
+import logging
+
+import scipy.stats as stats
+
+#import dsphsim
+sys.path.append('../dsphsim/')
+from dwarf import Dwarf
+from instruments import factory as instrumentFactory
+from tactician import factory as tacticianFactory
+from velocity import PhysicalVelocity
+import gzip
+from ugali.utils.projector import dist2mod, mod2dist
+
+def randerr(size=1,func='normal',**kwargs):
+    """ Return a sample from a random variate. """
+    kwargs.update(size=size)
+    funclower = func.lower()
+    if funclower in ['normal','gaussian','gauss']:
+        rvs = stats.norm.rvs
+    elif funclower in ['uniform']:
+        rvs = stats.uniform(-1,2).rvs
+    elif funclower in ['lorentzian','cauchy']:
+        rvs = stats.cauchy.rvs
+    elif funclower in ['delta']:
+        rvs = stats.randint(1,2).rvs
+    else:
+        raise Exception('Unrecognized type: %s'%func)
+    return rvs(**kwargs) 
+
+
+class Simulator(object):
+    
+    def run(self, num=1, exptime=10000):
+        self.create_dwarf()
+        self.create_instrument()
+        if not hasattr(exptime,'__iter__'): exptime = [exptime]
+
+        out = []
+        for e in exptime:
+            for i in num:
+                data = simulate(dwarf,instrument,exptime)
+                out.append(data)
+        return out
+    
+    @staticmethod
+    def simulate(dwarf,tactician,**kwargs):
+        """ Simulate observation """
+
+        #print(kinem,kwargs)
+        # Set the second band to 'i' (matches CaT lines)
+        dwarf.band_1 = 'g'; dwarf.band_2 = 'i'
+        dwarf.isochrone.band_1 = 'g'; dwarf.isochrone.band_2 = 'i'
+        mag_1,mag_2,ra,dec,velocity = dwarf.simulate()
+
+        # Draw the SNR from the instrument and observation tactician
+        # Use the i-band magnitude (eventually may include ra,dec too)
+
+        data = np.rec.fromarrays([mag_2],names=['mag'])
+        snr = tactician.schedule(data,**kwargs)
+        #snr = instrument.mag2snr(mag_2,exp)
+
+        #olderr = np.seterr(all='ignore')
+        # Allow user to change these thresholds?
+        snr_thresh = tactician.snr_thresh
+        saturate = tactician.instrument.MAGMIN
+
+        sel = (mag_1 > saturate) & (np.nan_to_num(snr) > snr_thresh)
+        nstar = sel.sum()
+        #np.seterr(**olderr)
+
+        ra = ra[sel]
+        dec = dec[sel]
+        mag_1 = mag_1[sel]
+        mag_2 = mag_2[sel]
+        sep = dwarf.kernel.angsep(ra,dec)
+        vel = velocity[sel]
+        snr = snr[sel]
+
+        rproj = dwarf.distance * np.tan(np.radians(sep))
+        #mag = mag_1
+        #color = (mag_1-mag_2)
+
+        # The true velocity, u, of each star is the sum of the mean velocity and
+        # a sampling of the intrinsic velocity dispersion
+        vtrue = vel
+
+        # There are two components of the measurement uncertainty on
+        # the velocity of each star
+        vstaterr = tactician.instrument.snr2err(snr)
+        vsyserr = tactician.instrument.vsys * np.ones_like(snr)
+
+        # The measured velocity is the true velocity plus a component from the
+        # instrumental measurement error
+        vstat = vstaterr*randerr(nstar,'normal')
+        vsys = vsyserr*randerr(nstar,'normal')
+
+        vmeas = vtrue + vstat + vsys
+
+        # Now assign the measurement error to the statistical error
+        vmeaserr = vstaterr
+
+        # The error that is commonly used is the sum of the measurement error
+        # and the systematic error added in quadrature
+        verr = np.sqrt(vstaterr**2 + vsyserr**2)
+
+        # Do we also want to save vsyserr as VSYSERR?
+        names = ['RA','DEC',
+                 'MAG_%s'%dwarf.band_1.upper(),'MAG_%s'%dwarf.band_2.upper(),
+                 'ANGSEP','RPROJ','SNR',
+                 'VTRUE','VSTAT','VSYS',
+                 'VMEAS','VMEASERR','VSYSERR','VERR']
+        data = [ra, dec,
+                mag_1, mag_2,
+                sep, rproj, snr,
+                vtrue, vstat, vsys,
+                vmeas, vmeaserr, vsyserr, verr]
+        return np.rec.fromarrays(data,names=names)
+
+    @staticmethod
+    def simulate_ss(dwarf,tactician,kinem,plum=False,**kwargs):
+        """ Simulate observation """
+
+        #print(kinem,kwargs)
+        # Set the second band to 'i' (matches CaT lines)
+        dwarf.band_1 = 'g'; dwarf.band_2 = 'i'
+        dwarf.isochrone.band_1 = 'g'; dwarf.isochrone.band_2 = 'i' 
+        #mag_1,mag_2,x,y,velocity = dwarf.simulate_ss(kinem)
+        mag_1,mag_2,mlist=dwarf.simulate_ss1()
+
+        # Draw the SNR from the instrument and observation tactician
+        # Use the i-band magnitude (eventually may include ra,dec too)
+
+        if "g"==(tactician.instrument._filename.split(".")[0][-1]):
+            print("whoo")
+            data = np.rec.fromarrays([mag_1],names=['mag'])
+        else:
+            data = np.rec.fromarrays([mag_2],names=['mag'])
+        snr = tactician.schedule(data,**kwargs)
+        #snr = instrument.mag2snr(mag_2,exp)
+
+        #olderr = np.seterr(all='ignore')
+        # Allow user to change these thresholds?
+        snr_thresh = tactician.snr_thresh
+        saturate = tactician.instrument.MAGMIN
+
+        sel = (mag_1 > saturate) & (np.nan_to_num(snr) > snr_thresh)
+        nstar = sel.sum()
+        #np.seterr(**olderr)
+
+        mag_1 = mag_1[sel]
+        mag_2 = mag_2[sel]
+        snr = snr[sel]
+        mlist=mlist[sel]
+
+        if len(mag_1)>0:
+            x,y,velocity=dwarf.simulate_ss2(kinem,mag_1,plum)
+            from ugali.utils.projector import Projector
+            projector = Projector(kinem[-2],kinem[-1],'ait') 
+            ra,dec=projector.imageToSphere(np.degrees(np.arctan(x/dwarf.distance) ),np.degrees(np.arctan(y/dwarf.distance) ))        
+       
+            ra = ra
+            dec = dec
+            vel = velocity
+            sep = dwarf.kernel.angsep(ra,dec)
+    
+            rproj = dwarf.distance * np.tan(np.radians(sep))
+            #rrr=(np.sqrt(x**2+y**2))[sel]
+    
+            #mag = mag_1
+            #color = (mag_1-mag_2)
+    
+            # The true velocity, u, of each star is the sum of the mean velocity and
+            # a sampling of the intrinsic velocity dispersion
+            vtrue = vel
+    
+            # There are two components of the measurement uncertainty on
+            # the velocity of each star
+            vstaterr = tactician.instrument.snr2err(snr)
+            vsyserr = tactician.instrument.vsys * np.ones_like(snr)
+      
+            # The measured velocity is the true velocity plus a component from the
+            # instrumental measurement error
+            vstat = vstaterr*randerr(nstar,'normal')
+            vsys = vsyserr*randerr(nstar,'normal')
+    
+            vmeas = vtrue + vstat + vsys
+    
+            # Now assign the measurement error to the statistical error
+            vmeaserr = vstaterr
+    
+            # The error that is commonly used is the sum of the measurement error
+            # and the systematic error added in quadrature
+            verr = np.sqrt(vstaterr**2 + vsyserr**2)
+     
+        else:
+            ra=[]
+            dec=[]
+            sep=[]
+            rproj=[]
+            vtrue=[]
+            vstat=[]
+            vsys=[]
+            vmeas=[]
+            vmeaserr=[]
+            vsyserr=[]
+            verr=[]
+            mlist=[]
+
+        # Do we also want to save vsyserr as VSYSERR?
+        names = ['RA','DEC',
+                 'MAG_%s'%dwarf.band_1.upper(),'MAG_%s'%dwarf.band_2.upper(),
+                 'ANGSEP','RPROJ','SNR',
+                 'VTRUE','VSTAT','VSYS',
+                 'VMEAS','VMEASERR','VSYSERR','VERR','MASS']
+        data = [ra, dec,
+                mag_1, mag_2,
+                sep, rproj, snr,
+                vtrue, vstat, vsys,
+                vmeas, vmeaserr, vsyserr, verr,mlist]
+
+        names = ['RA','DEC',
+                 'MAG_%s'%dwarf.band_1.upper(),'MAG_%s'%dwarf.band_2.upper(),
+                 'SNR','VTRUE','VMEAS','VERR','MASS']
+        data = [ra, dec,
+                mag_1, mag_2,
+                snr,vtrue, vmeas, verr,mlist]
+        return np.rec.fromarrays(data,names=names)
+
+    @staticmethod
+    def simulate_ss_old(dwarf,tactician,kinem,**kwargs):
+        """ Simulate observation """
+
+        #print(kinem,kwargs)
+        # Set the second band to 'i' (matches CaT lines)
+        dwarf.band_1 = 'g'; dwarf.band_2 = 'i'
+        mag_1,mag_2,x,y,velocity = dwarf.simulate_ss(kinem)
+
+        from ugali.utils.projector import Projector
+        projector = Projector(kinem[-2],kinem[-1],'ait') 
+        ra,dec=projector.imageToSphere(np.degrees(np.arctan(x/dwarf.distance) ),np.degrees(np.arctan(y/dwarf.distance) ))
+   
+        # Draw the SNR from the instrument and observation tactician
+        # Use the i-band magnitude (eventually may include ra,dec too)
+        data = np.rec.fromarrays([mag_2],names=['mag'])
+        snr = tactician.schedule(data,**kwargs)
+        #snr = instrument.mag2snr(mag_2,exp)
+
+        #olderr = np.seterr(all='ignore')
+        # Allow user to change these thresholds?
+        snr_thresh = tactician.snr_thresh
+        saturate = tactician.instrument.MAGMIN
+
+        sel = (mag_1 > saturate) & (np.nan_to_num(snr) > snr_thresh)
+        nstar = sel.sum()
+        #np.seterr(**olderr)
+
+        ra = ra[sel]
+        dec = dec[sel]
+        mag_1 = mag_1[sel]
+        mag_2 = mag_2[sel]
+        sep = dwarf.kernel.angsep(ra,dec)
+        vel = velocity[sel]
+        snr = snr[sel]
+
+        rproj = dwarf.distance * np.tan(np.radians(sep))
+        #rrr=(np.sqrt(x**2+y**2))[sel]
+
+        #mag = mag_1
+        #color = (mag_1-mag_2)
+
+        # The true velocity, u, of each star is the sum of the mean velocity and
+        # a sampling of the intrinsic velocity dispersion
+        vtrue = vel
+
+        # There are two components of the measurement uncertainty on
+        # the velocity of each star
+        vstaterr = tactician.instrument.snr2err(snr)
+        vsyserr = tactician.instrument.vsys * np.ones_like(snr)
+  
+        # The measured velocity is the true velocity plus a component from the
+        # instrumental measurement error
+        vstat = vstaterr*randerr(nstar,'normal')
+        vsys = vsyserr*randerr(nstar,'normal')
+
+        vmeas = vtrue + vstat + vsys
+
+        # Now assign the measurement error to the statistical error
+        vmeaserr = vstaterr
+
+        # The error that is commonly used is the sum of the measurement error
+        # and the systematic error added in quadrature
+        verr = np.sqrt(vstaterr**2 + vsyserr**2)
+
+        # Do we also want to save vsyserr as VSYSERR?
+        names = ['RA','DEC',
+                 'MAG_%s'%dwarf.band_1.upper(),'MAG_%s'%dwarf.band_2.upper(),
+                 'ANGSEP','RPROJ','SNR',
+                 'VTRUE','VSTAT','VSYS',
+                 'VMEAS','VMEASERR','VSYSERR','VERR']
+        data = [ra, dec,
+                mag_1, mag_2,
+                sep, rproj, snr,
+                vtrue, vstat, vsys,
+                vmeas, vmeaserr, vsyserr, verr]
+        return np.rec.fromarrays(data,names=names)
+
+    @classmethod
+    def parser(cls):
+        import argparse
+        description = "Simulate the observable properties of a dwarf galaxy."
+        formatter = argparse.ArgumentDefaultsHelpFormatter
+        parser = argparse.ArgumentParser(description=description,
+                                         formatter_class=formatter)
+        parser.add_argument('outfile',nargs='?',
+                            help="optional output file")
+        parser.add_argument('--seed',type=int,default=None,
+                            help="random seed")
+        parser.add_argument('-v','--verbose',action='store_true',
+                            help="verbose output")
+        parser.add_argument('-n','--nsims',type=int,default=1,
+                            help="number of simulations")
+         
+        group = parser.add_argument_group('Physical')
+        group.add_argument('--stellar_mass',type=float,default=2000.,
+                            help='stellar mass of satellite (Msun)')
+
+        group = parser.add_argument_group('Kinematic')
+        group.add_argument('--kinematics',type=str,default='Gaussian',
+                           choices = ['Gaussian', 'Physical','Stellar','StarSampler','StarSamplerp'],
+                           help='kinematic distribution function')
+        group.add_argument('--vmean',type=float,default=60.,
+                            help='mean systemic velocity (km/s)')
+        # should be mutually exclusive with vmax and rs
+        egroup1 = group.add_mutually_exclusive_group()
+        egroup2 = group.add_mutually_exclusive_group()
+        egroup1.add_argument('--vdisp',type=float,default=3.3,
+                            help='gaussian velocity dispersion (km/s)')
+        egroup2.add_argument('--rvmax',type=float,default=0.4,
+                           help='radius of max circular velocity (kpc)')
+        egroup1.add_argument('--vmax',type=float,default=10.0,
+                            help='maximum circular velocity (km/s)')
+        egroup2.add_argument('--rs',type=float,default=None,
+                           help='scale radius for NFW halo (kpc)')
+        egroup1.add_argument('--rhos',type=float,default=None,
+                            help='scale density for NFW halo (Msun/pc^3)')
+         
+        group = parser.add_argument_group('Isochrone')
+        group.add_argument('--isochrone',type=str,default='Bressan2012',
+                            help='isochrone type')
+        group.add_argument('--age',type=float,default=12.0,
+                           help='age of stellar population (Gyr)')
+        group.add_argument('--metallicity',type=float,default=2e-4,
+                           help='metallicity of stellar population')
+        egroup = group.add_mutually_exclusive_group()
+        egroup.add_argument('--distance_modulus','--modulus',type=float,default=17.5,
+                            help='distance modulus')
+        egroup.add_argument('--distance',type=float,default=None,
+                            help='distance (kpc)')
+         
+        group = parser.add_argument_group('Kernel')
+        group.add_argument('--kernel',type=str,default='EllipticalPlummer',
+                           help='kernel type')
+        group.add_argument('--ra',type=float,default=54.0,
+                           help='centroid right acension (deg)')
+        group.add_argument('--dec',type=float,default=-54.0,
+                           help='centroid declination (deg)')
+        egroup = group.add_mutually_exclusive_group()
+        egroup.add_argument('--extension',type=float,default=0.1,
+                            help='projected angular half-light radius (deg)')
+        egroup.add_argument('--rhalf',type=float,default=None,
+                            help='projected physical half-light radius (kpc)')
+        group.add_argument('--ellipticity',type=float,default=0.0,
+                           help='spatial extension (deg)')
+        group.add_argument('--position_angle',type=float,default=0.0,
+                           help='position angle east-of-north (deg)')
+         
+        group = parser.add_argument_group('Instrument')
+        group.add_argument('--instrument',default='gmacs',
+                           help='spectroscopic instrument')
+        group.add_argument('--vsys',default=None,type=float,
+                           help='systematic velocity error (km/s)')
+
+        group = parser.add_argument_group('Tactician')
+        group.add_argument('--tactician',default=None,
+                           help='observation tactician')
+        group.add_argument('--snr_thresh',default=5,type=float,
+                           help='signal-to-noise threshold')
+        egroup = group.add_mutually_exclusive_group()
+        egroup.add_argument('--obstime','--exptime',default=3600.,type=float,
+                            help='total observation time (s)')
+        egroup.add_argument('--maglim',default=None,type=float,
+                            help='limiting magnitude (given snr-thresh)')
+        egroup.add_argument('--nstars',default=None,type=int,
+                            help='number of stars (given snr-thresh)')
+        
+        return parser
+
+    @classmethod
+    def parse_args(cls, parser=None):
+        """
+        Resolve mutually exclusive arguments.
+        """
+        if parser is None: parser = cls.parser()
+        args = parser.parse_args()
+     
+        if args.verbose:
+            logging.getLogger().setLevel(logging.DEBUG)
+        if args.seed is not None:
+            np.random.seed(args.seed)
+
+        # Convert halo parameters
+        if args.rs is not None: 
+            args.rvmax = PhysicalVelocity.rs2rvmax(args.rs)
+            #args.rvmax = 2.163*args.rs
+
+        if args.rhos is not None: 
+            #raise Exception('Not implemented')
+            rs = PhysicalVelocity.rvmax2rs(args.rvmax)
+            args.vmax = PhysicalVelocity.rhos2vmax(args.rhos,rs)
+
+        # Convert physical parameters
+        if args.distance is not None:
+            args.distance_modulus = dist2mod(args.distance)
+        if args.rhalf is not None:
+            distance = mod2dist(args.distance_modulus)
+            print("ext",args.rhalf,distance)
+            args.extension = np.degrees(np.arctan(args.rhalf/distance))
+            if args.extension>0.5:
+                args.extension=0.5     
+
+        return args
+
+if __name__ == "__main__":
+    #parser = Simulator.parser()
+    #args = parser.parse_args()
+    #kwargs = vars(args)
+    args = Simulator.parse_args()
+
+    #logging.debug('%(prog)s %(version)s'
+    dwarf = Dwarf()
+    isochrone=Dwarf.createIsochrone(name=args.isochrone, age=args.age,
+                                    metallicity=args.metallicity,
+                                    distance_modulus=args.distance_modulus)
+    dwarf.set_isochrone(isochrone)
+
+    print("arguments",args.kernel,args.extension,args.ellipticity,args.position_angle,args.ra,args.dec)
+    kernel=Dwarf.createKernel(name=args.kernel,extension=args.extension,
+                              ellipticity=args.ellipticity,
+                              position_angle=args.position_angle,
+                              lon=args.ra,lat=args.dec)
+    dwarf.set_kernel(kernel)
+    dwarf.richness = args.stellar_mass/dwarf.isochrone.stellar_mass()
+
+    # Set the kinematic properties
+    #if args.rs is not None: args.rvmax = 2.163*args.rs
+    #if args.rhos is not None: raise Exception('Not implemented')
+    kinem=args.kinematics
+    if args.kinematics=='StarSampler' or args.kinematics=='StarSamplerp':
+        kinem='Gaussian'
+    kinematics=Dwarf.createKinematics(name=kinem, 
+                                      vdisp=args.vdisp, vmean=args.vmean,
+                                      vmax=args.vmax, rvmax=args.rvmax)
+    dwarf.set_kinematics(kinematics)
+    logging.debug('\n'+str(dwarf))
+
+    # Build and configure the instrument
+    instr = instrumentFactory(args.instrument)
+    if args.vsys is not None: instr.vsys = args.vsys
+
+    # Build and configure the tactician (holds the instrument)
+    if not args.tactician:
+        if args.maglim:    args.tactician = 'MaglimTactician'
+        elif args.nstars:  args.tactician = 'NStarsTactician'
+        elif args.obstime: args.tactician = 'ObstimeTactician'
+    tact_kwargs = dict(obstime=args.obstime,snr_thresh=args.snr_thresh,
+                       maglim=args.maglim,nstars=args.nstars)
+    tact = tacticianFactory(args.tactician,instrument=instr,**tact_kwargs)
+    logging.debug('\n'+str(tact))
+                               
+    for i in range(args.nsims):
+        # Run the simulation
+
+        rs=PhysicalVelocity.rvmax2rs(args.rvmax)
+        rhos=PhysicalVelocity.vmax2rhos(args.vmax, args.rvmax)
+        #print([args.kinematics,args.vmean,rhos,rs,args.rhalf,args.ra,args.dec])
+        if args.kinematics=='StarSampler':
+            data = Simulator.simulate_ss(dwarf,tact,[args.kinematics,args.vmean,rhos,rs,args.rhalf,args.ra,args.dec])
+        elif args.kinematics=='StarSamplerp':
+            data = Simulator.simulate_ss(dwarf,tact,[args.kinematics,args.vmean,rhos,rs,args.rhalf,args.ra,args.dec],True)
+        else:
+            data = Simulator.simulate(dwarf,tact)     
+
+        # Write output
+        if args.outfile:
+            outfile = args.outfile
+            if args.nsims > 1:
+                base,ext = os.path.splitext(outfile)
+                suffix = '_{:0{width}d}'.format(i+1,width=len(str(args.nsims)))
+                outfile = base + suffix + ext
+            if os.path.exists(outfile): os.remove(outfile)
+            logging.info("Writing %s..."%outfile)
+
+            if outfile[-3:]==".gz":
+                print("as a gzip")
+                out = gzip.open(outfile,'wt',1)
+            else:
+                out = open(outfile,'wt',1)
+        else:
+            out = sys.stdout
+
+        #out.write('# '+os.path.basename(sys.argv[0])+' '+dsphsim.__version__+'\n')
+        #out.write('# '+' '.join(sys.argv[1:]) + '\n')
+        out.write('#'+' '.join(['%-9s'%n for n in data.dtype.names])+'\n')
+        np.savetxt(out,data,fmt='%-9.5f')
+        out.flush()
