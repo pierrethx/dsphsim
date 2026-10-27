@@ -1,0 +1,1 @@
+This is a simple code suite for simulating the velocity dispersions of stars in dwarf galaxies, under the influence of a dark matter halo. This code is a copy of https://github.com/kadrlica/dsphsim/tree/master, though we have added a few mag-to-SNR relations and also swapped out the potential sampling code with https://github.com/maoshenl/StarSampler/tree/master.
